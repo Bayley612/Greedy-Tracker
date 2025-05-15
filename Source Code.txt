@@ -1,0 +1,157 @@
+#define _CRT_SECURE_NO_WARNINGS
+
+#include <opencv2/opencv.hpp>
+#include <windows.h>
+#include <shobjidl.h>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+#include <ctime>
+#include <regex>
+#include <map>
+#include <numeric>
+#include <locale>
+
+std::string formatWithCommas(int value) {
+    std::stringstream ss;
+    ss.imbue(std::locale(""));
+    ss << std::fixed << value;
+    return ss.str();
+}
+
+std::string configFile = "config.txt";
+std::string logFilePath;
+
+std::string openFileDialog() {
+    IFileOpenDialog* pFileOpen;
+    std::string filePath = "";
+
+    if (SUCCEEDED(CoInitializeEx(NULL, COINIT_APARTMENTTHREADED))) {
+        if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pFileOpen)))) {
+            if (SUCCEEDED(pFileOpen->Show(NULL))) {
+                IShellItem* pItem;
+                if (SUCCEEDED(pFileOpen->GetResult(&pItem))) {
+                    PWSTR pszFilePath;
+                    if (SUCCEEDED(pItem->GetDisplayName(SIGDN_FILESYSPATH, &pszFilePath))) {
+                        char buffer[MAX_PATH];
+                        wcstombs(buffer, pszFilePath, MAX_PATH);
+                        filePath = buffer;
+                        CoTaskMemFree(pszFilePath);
+                    }
+                    pItem->Release();
+                }
+            }
+            pFileOpen->Release();
+        }
+        CoUninitialize();
+    }
+    return filePath;
+}
+
+void loadLogFilePath() {
+    std::ifstream infile(configFile);
+    if (infile) {
+        std::getline(infile, logFilePath);
+    }
+    else {
+        logFilePath = openFileDialog();
+        std::ofstream outfile(configFile);
+        outfile << logFilePath;
+    }
+}
+
+std::tm parseDateTime(const std::string& dateLine, const std::string& timeLine) {
+    std::tm tm = {};
+    int year, month, day, hour, minute, second;
+    sscanf(dateLine.c_str(), "====== %d/%d/%d ======", &year, &month, &day);
+    sscanf(timeLine.c_str(), "[%d:%d:%d]", &hour, &minute, &second);
+    tm.tm_year = year - 1900;
+    tm.tm_mon = month - 1;
+    tm.tm_mday = day;
+    tm.tm_hour = hour;
+    tm.tm_min = minute;
+    tm.tm_sec = second;
+    return tm;
+}
+
+std::multimap<std::time_t, int> parseLog(const std::string& path) {
+    std::ifstream file(path);
+    std::string line, currentDate;
+    std::multimap<std::time_t, int> records;
+
+    while (std::getline(file, line)) {
+        if (line.find("======") != std::string::npos) {
+            currentDate = line;
+        }
+        else if (line.find("Ye slash open the purse to find") != std::string::npos) {
+            std::smatch match;
+            std::regex rgx(R"(\[(\d+:\d+:\d+)\].*?find (\d+) pieces)");
+            if (std::regex_search(line, match, rgx)) {
+                std::string timeStr = match[1];
+                int value = std::stoi(match[2]);
+
+                std::tm tm = parseDateTime(currentDate, "[" + timeStr + "]");
+                std::time_t timestamp = std::mktime(&tm);
+                records.insert(std::make_pair(timestamp, value));
+            }
+        }
+    }
+    return records;
+}
+
+int sumWithinPeriod(const std::multimap<std::time_t, int>& records, int secondsBack) {
+    std::time_t now = std::time(nullptr);
+    std::time_t cutoff = now - secondsBack;
+    int total = 0;
+    for (const auto& record : records) {
+        if (record.first >= cutoff) {
+            total += record.second;
+        }
+    }
+    return total;
+}
+
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd) {
+    loadLogFilePath();
+
+    std::vector<std::pair<std::string, int>> options = {
+        {"Last 10 minutes", 600},
+        {"Last 7 days", 60 * 60 * 24 * 7},
+        {"Last 30 days", 60 * 60 * 24 * 30},
+        {"Last 90 days", 60 * 60 * 24 * 90},
+        {"All time", -1}
+    };
+
+    while (true) {
+        auto data = parseLog(logFilePath);
+
+        cv::Mat gui(300, 360, CV_8UC3, cv::Scalar(30, 30, 30));
+        cv::putText(gui, "Greedy Purse Tracker", cv::Point(40, 40),
+            cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
+
+        int y = 80;
+        for (const auto& option : options) {
+            int total = (option.second == -1)
+                ? std::accumulate(data.begin(), data.end(), 0,
+                    [](int sum, const std::pair<std::time_t, int>& p) { return sum + p.second; })
+                : sumWithinPeriod(data, option.second);
+
+            std::string formatted = formatWithCommas(total);
+            cv::putText(gui, option.first + ": " + formatted + " PoE",
+                cv::Point(40, y), cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(200, 255, 200), 1);
+            y += 40;
+        }
+
+        cv::imshow("Greedy Purse Tracker", gui);
+
+        // Exit if window is closed or Esc is pressed
+        int key = cv::waitKey(1000);
+        if (key == 27 || cv::getWindowProperty("Greedy Purse Tracker", cv::WND_PROP_VISIBLE) < 1) {
+            break;
+        }
+
+    }
+
+    return 0;
+}
