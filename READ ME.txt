@@ -1,0 +1,8 @@
+Open up the Greedy Tracker and select your Puzzle Pirates game chatlog location. 
+It will remember this file forever unless you delete config.txt.
+It will display the last 10 minutes (Basically the most recently opened ones)
+7 days , 30, days, 90 days, and All time.
+
+This will only display as far back as your chat log goes... so date you set the option to start one in game.
+
+Enjoy Tracking your Poe Won off greedy purses :P 
